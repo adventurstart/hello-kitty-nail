@@ -316,24 +316,29 @@ function load(){
     return d; } }catch(e){ console.warn(e); }
   return defaultDB();
 }
-function save(){ localStorage.setItem(KEY, JSON.stringify(DB)); supaPush(); }
+function save(){ localStorage.setItem(KEY, JSON.stringify(DB)); supaPush().catch(()=>{}); }
 function applyFontScale(){ const s=(DB.settings&&DB.settings.fontScale)||1; document.body.style.zoom=s; }
 function setFontScale(v){ DB.settings.fontScale=v; save(); applyFontScale(); render(); toast(`字体已设为${v===1?"标准":v<1?"小":v>=1.3?"特大":v>=1.15?"大":"标准"} 💗`); }
 
 /* ============ Supabase 云端同步 ============ */
 function supaCfg(){ const s=DB.settings.supabase; return (s&&s.enabled&&s.url&&s.key&&s.workId)?s:null; }
 async function supaPush(cfg, quiet=false){
-  cfg=cfg||supaCfg(); if(!cfg) return false;
+  cfg=cfg||supaCfg(); if(!cfg) return {ok:false,error:"未启用或未配置 Supabase"};
   try{
+    const body=JSON.stringify({ id:cfg.workId, data:DB, updated_at:new Date().toISOString() });
+    if(body.length>1024*1024) throw new Error("数据体积过大（"+Math.round(body.length/1024)+"KB），建议清理相册大图后再上传");
     const res=await fetch(cfg.url.replace(/\/+$/,"")+"/rest/v1/workbench_data",{
       method:"POST",
-      headers:{ "apikey":cfg.key, "Authorization":"Bearer "+cfg.key, "Content-Type":"application/json", "Prefer":"resolution=merge-duplicates" },
-      body: JSON.stringify({ id:cfg.workId, data:DB, updated_at:new Date().toISOString() })
+      headers:{ "apikey":cfg.key, "Authorization":"Bearer "+cfg.key, "Content-Type":"application/json", "Prefer":"resolution=merge-duplicates,return=minimal" },
+      body
     });
-    if(!res.ok) throw new Error("HTTP "+res.status);
+    if(!res.ok){
+      let detail=""; try{ detail=await res.text(); }catch(_){}
+      throw new Error(res.status+" "+res.statusText+(detail?": "+detail:""));
+    }
     if(!quiet) toast("已同步到云端 ☁");
-    return true;
-  }catch(e){ console.warn("supaPush",e); if(!quiet) toast("同步失败，请检查配置"); return false; }
+    return {ok:true};
+  }catch(e){ console.warn("supaPush",e); if(!quiet) toast("同步失败："+e.message); return {ok:false,error:e.message}; }
 }
 async function supaPull(cfg){
   cfg=cfg||supaCfg(); if(!cfg) return null;
@@ -341,7 +346,7 @@ async function supaPull(cfg){
     const res=await fetch(cfg.url.replace(/\/+$/,"")+"/rest/v1/workbench_data?id=eq."+encodeURIComponent(cfg.workId)+"&select=data",{
       headers:{ "apikey":cfg.key, "Authorization":"Bearer "+cfg.key }
     });
-    if(!res.ok) throw new Error("HTTP "+res.status);
+    if(!res.ok){ let detail=""; try{ detail=await res.text(); }catch(_){} throw new Error(res.status+" "+res.statusText+(detail?": "+detail:"")); }
     const rows=await res.json();
     return (rows&&rows[0]&&rows[0].data)?rows[0].data:null;
   }catch(e){ console.warn("supaPull",e); throw e; }
@@ -1024,7 +1029,7 @@ function openSettings(){
     save(); closeModal(); render(); toast("设置已保存 💗"); };
   $("#stPush").onclick=async()=>{ const cfg={url:$("#st_url").value,key:$("#st_key").value,workId:$("#st_wid").value,enabled:true};
     if(!cfg.url||!cfg.key||!cfg.workId){ toast("请先填好 URL / Anon Key / 工作台ID"); return; }
-    s.supabase=cfg; $("#st_en").checked=true; localStorage.setItem(KEY, JSON.stringify(DB)); toast("正在上传…"); const ok=await supaPush(cfg,true); toast(ok?"上传成功 ☁":"上传失败，请检查 URL / Key / 网络"); };
+    s.supabase=cfg; $("#st_en").checked=true; localStorage.setItem(KEY, JSON.stringify(DB)); toast("正在上传…"); const r=await supaPush(cfg,true); toast(r.ok?"上传成功 ☁":("上传失败："+(r.error||"请检查 URL / Key / 网络"))); };
   $("#stPull").onclick=async()=>{ const cfg={url:$("#st_url").value,key:$("#st_key").value,workId:$("#st_wid").value,enabled:true};
     if(!cfg.url||!cfg.key||!cfg.workId){ toast("请先填好 URL / Anon Key / 工作台ID"); return; }
     toast("正在从云端拉取…"); try{ const data=await supaPull(cfg);
